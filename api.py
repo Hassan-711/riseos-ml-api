@@ -1,16 +1,18 @@
 """
 RiseOS ML Microservice — FastAPI
-Serves predictions + SHAP explanations + Gemini AI Roadmap Generator
+Serves predictions + SHAP explanations + Gemini AI Roadmap Generator + Export Logic
 """
 
 import os
 import json
 import joblib
 import numpy as np
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from google import genai
 
 app = FastAPI(
     title="RiseOS AI Engine",
@@ -26,17 +28,9 @@ app.add_middleware(
 )
 
 # ── 1. AI ROADMAP GENERATOR SETUP (GEMINI) ──────────────────────────────────
-from google import genai # <--- NAYA IMPORT
-from google.genai import types
-import os
-import json
-from pydantic import BaseModel, Field
-from fastapi import HTTPException
+# Using environment variable so the key is not exposed to GitHub
 
-# Yahan par apni wahi copy ki hui key daal dena (quotes ke andar)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Naya client initialize karna
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 class RoadmapRequest(BaseModel):
@@ -70,9 +64,8 @@ def generate_roadmap(data: RoadmapRequest):
         ]
         """
         
-        # Naye package ka function use karna
         response = client.models.generate_content(
-            model='gemini-2.5-flash', # Hum latest aur fastest model use kar rahe hain
+            model='gemini-2.5-flash',
             contents=system_prompt,
         )
         
@@ -96,7 +89,47 @@ def generate_roadmap(data: RoadmapRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── 2. ML MODEL SETUP (STUDENT PREDICTION) ──────────────────────────────────
+# ── 2. EXPORT ROADMAP TO MARKDOWN FEATURE ───────────────────────────────────
+class MilestoneExport(BaseModel):
+    title: str
+    status: str
+
+class GoalExport(BaseModel):
+    title: str
+    status: str
+    description: Optional[str] = None
+    milestones: List[MilestoneExport] = []
+
+class RoadmapExportRequest(BaseModel):
+    goals: List[GoalExport]
+
+@app.post("/export-roadmap")
+def export_roadmap(data: RoadmapExportRequest):
+    md_content = "# 🚀 My RiseOS Career Roadmap\n\n"
+    
+    for goal in data.goals:
+        # Check if goal is completed, active or pending
+        g_status = "✅" if goal.status == "completed" else ("⚡" if goal.status == "active" else "⏳")
+        md_content += f"## {g_status} {goal.title}\n"
+        
+        if goal.description:
+            md_content += f"*{goal.description}*\n\n"
+        
+        for m in goal.milestones:
+            # Add check-boxes for tasks
+            m_status = "[x]" if m.status == "completed" else "[ ]"
+            md_content += f"- {m_status} {m.title}\n"
+            
+        md_content += "\n---\n\n"
+        
+    return Response(
+        content=md_content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": 'attachment; filename="My_RiseOS_Roadmap.md"'}
+    )
+
+
+# ── 3. ML MODEL SETUP (STUDENT PREDICTION) ──────────────────────────────────
 # Load model artifacts on startup
 model    = joblib.load('model.pkl')
 explainer = joblib.load('explainer.pkl')
